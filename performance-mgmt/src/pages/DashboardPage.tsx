@@ -1,24 +1,77 @@
-import React, { useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Users,
   CheckCircle2,
   AlertCircle,
   TrendingUp,
   BarChart3,
+  Clock3,
+  Loader,
 } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { KPICard, Badge } from '../components';
 import { MainLayout } from '../layouts/MainLayout';
-import { mockDataService } from '../data/mockData';
+import { taskService } from '../services/taskService';
+import { employeeService } from '../services/employeeService';
+import { departmentService } from '../services/departmentService';
+import type { Task } from '../services/taskService';
+import type { Employee } from '../services/employeeService';
+import type { Department } from '../services/departmentService';
 
 export const DashboardPage: React.FC = () => {
-  const stats = useMemo(() => mockDataService.getDashboardStats(), []);
-  const tasks = useMemo(() => mockDataService.getTasks(), []);
-  const departments = useMemo(() => mockDataService.getDepartments(), []);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const [taskData, empData, deptData] = await Promise.all([
+        taskService.getAll(),
+        employeeService.getAll(),
+        departmentService.getAll(),
+      ]);
+      setTasks(taskData);
+      setEmployees(empData);
+      setDepartments(deptData);
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to load dashboard data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const stats = useMemo(() => {
+    const completedTasks = tasks.filter(t => t.status === 'COMPLETED');
+    const overdueTasks = tasks.filter(t => t.status === 'OVERDUE');
+    const avgScore = employees.length > 0 ? Math.round(
+      employees.reduce((sum, e) => sum + e.performanceScore, 0) / employees.length
+    ) : 0;
+
+    const topPerformers = [...employees]
+      .sort((a, b) => b.performanceScore - a.performanceScore)
+      .slice(0, 5);
+
+    return {
+      totalEmployees: employees.length,
+      tasksAssigned: tasks.length,
+      tasksCompleted: completedTasks.length,
+      overdueTasks: overdueTasks.length,
+      averagePerformanceScore: avgScore,
+      topPerformers,
+    };
+  }, [tasks, employees]);
 
   // Task completion chart data
   const taskChartData = useMemo(() => {
-    const statuses = ['Pending', 'In Progress', 'Completed', 'Overdue'];
+    const statuses = ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'OVERDUE'];
     return statuses.map(status => ({
       name: status,
       count: tasks.filter(t => t.status === status).length,
@@ -29,7 +82,7 @@ export const DashboardPage: React.FC = () => {
   const deptChartData = useMemo(() => {
     return departments.map(dept => ({
       name: dept.name,
-      score: dept.averageScore,
+      score: dept.averageScore || 0,
     }));
   }, [departments]);
 
@@ -43,10 +96,40 @@ export const DashboardPage: React.FC = () => {
     { month: 'Jun', performance: 85, tasks: 225 },
   ];
 
+  const recentActivity = useMemo(() => {
+    return tasks.slice(0, 6).map((task, index) => {
+      const employee = stats.topPerformers[index % stats.topPerformers.length];
+      return {
+        id: task.id,
+        title: task.status === 'COMPLETED' ? 'Task completed' : task.status === 'OVERDUE' ? 'Task overdue' : 'Task updated',
+        description: `${employee?.name ?? 'Team member'} - ${task.title}`,
+        time: `${index + 1}h ago`,
+        status: task.status,
+      };
+    });
+  }, [tasks, stats.topPerformers]);
+
   const COLORS = ['#0ea5e9', '#3b82f6', '#1e40af', '#1e3a8a'];
+
+  if (loading) {
+    return (
+      <MainLayout>
+        <div className="flex justify-center items-center h-64">
+          <Loader className="animate-spin" size={32} />
+        </div>
+      </MainLayout>
+    );
+  }
 
   return (
     <MainLayout>
+      {error && (
+        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex gap-3">
+          <AlertCircle className="text-red-600" size={20} />
+          <p className="text-red-700">{error}</p>
+        </div>
+      )}
+
       <div className="p-6 md:p-8">
         {/* Page Header */}
         <div className="mb-8">
@@ -150,24 +233,47 @@ export const DashboardPage: React.FC = () => {
           </ResponsiveContainer>
         </div>
 
-        {/* Top Performers */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Top Performers</h2>
-          <div className="space-y-4">
-            {stats.topPerformers.map((emp, idx) => (
-              <div key={emp.id} className="flex items-center justify-between pb-4 border-b border-gray-100 last:border-0">
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-bold">
-                    {idx + 1}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Top Performers */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Top Performers</h2>
+            <div className="space-y-4">
+              {stats.topPerformers.map((emp, idx) => (
+                <div key={emp.id} className="flex items-center justify-between pb-4 border-b border-gray-100 last:border-0">
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-bold">
+                      {idx + 1}
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900">{emp.name}</p>
+                      <p className="text-sm text-gray-600">{emp.designation}</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="font-medium text-gray-900">{emp.name}</p>
-                    <p className="text-sm text-gray-600">{emp.designation}</p>
+                  <Badge variant="success">{emp.performanceScore}%</Badge>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Recent Activity */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Activity</h2>
+            <div className="space-y-4">
+              {recentActivity.map(activity => (
+                <div key={activity.id} className="flex gap-4 pb-4 border-b border-gray-100 last:border-0">
+                  <div className="mt-1 w-9 h-9 rounded-lg bg-gray-100 text-gray-600 flex items-center justify-center">
+                    <Clock3 size={18} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-medium text-gray-900">{activity.title}</p>
+                      <span className="text-xs text-gray-500 whitespace-nowrap">{activity.time}</span>
+                    </div>
+                    <p className="text-sm text-gray-600 truncate mt-1">{activity.description}</p>
                   </div>
                 </div>
-                <Badge variant="success">{emp.performanceScore}%</Badge>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
       </div>
